@@ -1,0 +1,1 @@
+from .calc_method import minimize_dnf_calc
