@@ -57,3 +57,5 @@ pylint-report.txt
 # macOS / Linux / Windows system files
 .DS_Store
 Thumbs.db
+
+lab4_not/
