@@ -54,3 +54,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+#(a∧!b∧!c∧d)∨e
+#a→!(!b∨c)

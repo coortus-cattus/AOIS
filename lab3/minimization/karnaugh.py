@@ -1,4 +1,4 @@
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Set
 from utils.table_printer import print_karnaugh_map
 from utils.common import term_to_string
 
@@ -10,180 +10,268 @@ def generate_gray_code(n: int) -> List[str]:
     second_half = first_half[::-1]
     return ["0" + code for code in first_half] + ["1" + code for code in second_half]
 
-def build_karnaugh_map(truth_table: List[Dict], variables: List[str], is_sknf: bool = False) -> tuple[List[List[int]], List[int], int, int, List[str], List[str], List[str], List[str]]:
-    """Строит карту Карно: двумерный для групп, плоский для печати."""
+def build_karnaugh_map(truth_table: List[Dict], variables: List[str], is_sknf: bool = False) -> tuple:
+    """Строит карту Карно для 2-5 переменных."""
     n = len(variables)
     if n > 5:
-        print("Карта Карно поддерживает только 2-5 переменных")
+        print("Карта Карно поддерживает до 5 переменных")
         return None, None, 0, 0, [], [], [], []
     
-    if n == 2:
+    # Определяем размеры карты для 2-5 переменных
+    if n == 1:
+        rows, cols = 1, 2
+        row_vars, col_vars = [], variables
+    elif n == 2:
         rows, cols = 2, 2
-        row_vars = [variables[0]]
-        col_vars = [variables[1]]
+        row_vars, col_vars = [variables[0]], [variables[1]]
     elif n == 3:
         rows, cols = 2, 4
-        row_vars = [variables[0]]
-        col_vars = [variables[1], variables[2]]
+        row_vars, col_vars = [variables[0]], variables[1:]
     elif n == 4:
         rows, cols = 4, 4
-        row_vars = [variables[0], variables[1]]
-        col_vars = [variables[2], variables[3]]
-    else:
+        row_vars, col_vars = variables[:2], variables[2:]
+    else:  # n == 5
         rows, cols = 4, 8
-        row_vars = [variables[0], variables[1]]
-        col_vars = [variables[2], variables[3], variables[4]]
+        row_vars, col_vars = variables[:2], variables[2:]
+    
+    # Генерируем коды Грея
+    gray_rows = generate_gray_code(len(row_vars))
+    gray_cols = generate_gray_code(len(col_vars))
     
     kmap_2d = [[0 for _ in range(cols)] for _ in range(rows)]
     kmap_flat = [0 for _ in range(rows * cols)]
-    gray_rows = ["0", "1"] if rows == 2 else ["00", "01", "11", "10"]
-    gray_cols = (
-        ["0", "1"] if cols == 2 else
-        ["00", "01", "11", "10"] if cols == 4 else
-        ["000", "001", "011", "010", "110", "111", "101", "100"]
-    )
     
-    for row in truth_table:
-        values = {var: 1 if row[var] else 0 for var in variables}
-        if n == 2:
-            r, c = values[variables[0]], values[variables[1]]
-        elif n == 3:
-            r = values[variables[0]]
-            col_bin = f"{values[variables[1]]}{values[variables[2]]}"
-            c = {"00": 0, "01": 1, "11": 3, "10": 2}[col_bin]  # Исправлен порядок для кода Грея
-        elif n == 4:
-            row_bin = f"{values[variables[0]]}{values[variables[1]]}"
-            col_bin = f"{values[variables[2]]}{values[variables[3]]}"
-            r = {"00": 0, "01": 1, "11": 2, "10": 3}[row_bin]
-            c = {"00": 0, "01": 1, "11": 2, "10": 3}[col_bin]
-        else:
-            row_bin = f"{values[variables[0]]}{values[variables[1]]}"
-            col_bin = f"{values[variables[2]]}{values[variables[3]]}{values[variables[4]]}"
-            r = {"00": 0, "01": 1, "11": 2, "10": 3}[row_bin]
-            c = {
-                "000": 0, "001": 1, "011": 2, "010": 3,
-                "110": 4, "111": 5, "101": 6, "100": 7
-            }[col_bin]
-        kmap_2d[r][c] = 1 if is_sknf and not row['result'] else 0 if is_sknf else 1 if row['result'] else 0
-        kmap_flat[r * cols + c] = kmap_2d[r][c]
+    # Заполняем карту
+    for row_idx in range(rows):
+        for col_idx in range(cols):
+            # Получаем значения переменных из позиции в карте
+            row_code = gray_rows[row_idx] if row_vars else ""
+            col_code = gray_cols[col_idx] if col_vars else ""
+            
+            # Создаем valuation для этой ячейки
+            valuation = {}
+            for i, var in enumerate(variables):
+                if i < len(row_code):
+                    valuation[var] = bool(int(row_code[i]))
+                elif i - len(row_code) < len(col_code):
+                    valuation[var] = bool(int(col_code[i - len(row_code)]))
+            
+            # Находим соответствующий результат в таблице истинности
+            for table_row in truth_table:
+                match = True
+                for var in variables:
+                    if table_row[var] != valuation.get(var, False):
+                        match = False
+                        break
+                if match:
+                    value = table_row['result']
+                    # Правильное заполнение карты
+                    if is_sknf:
+                        kmap_2d[row_idx][col_idx] = 0 if not value else 1
+                    else:
+                        kmap_2d[row_idx][col_idx] = 1 if value else 0
+                    kmap_flat[row_idx * cols + col_idx] = kmap_2d[row_idx][col_idx]
+                    break
     
     return kmap_2d, kmap_flat, rows, cols, row_vars, col_vars, gray_rows, gray_cols
 
-def find_groups(kmap_2d: List[List[int]], n_vars: int, variables: List[str], rows: int, cols: int, gray_rows: List[str], gray_cols: List[str], is_sknf: bool = False) -> List[List[Tuple[str, int]]]:
-    """Находит группы в карте Карно."""
-    target = 1
+def find_maximal_rectangles(kmap_2d: List[List[int]], target: int = 1) -> List[Set[Tuple[int, int]]]:
+    """Находит максимальные прямоугольники целевых значений."""
+    rows, cols = len(kmap_2d), len(kmap_2d[0])
     groups = []
-    possible_sizes = [8, 4, 2, 1] if n_vars > 2 else [4, 2, 1]
-    minterms = [(r, c) for r in range(rows) for c in range(cols) if kmap_2d[r][c] == target]
+    visited = set()
     
-    # Генерируем все возможные группы
-    for size in possible_sizes:
-        if size > rows * cols:
-            continue
-        for h in [1, 2, 4] if size > 1 else [1]:
-            for w in [size // h] if h * (size // h) == size else []:
-                for r in range(rows):
-                    for c in range(cols):
-                        cells = set()
-                        valid = True
-                        for i in range(h):
-                            for j in range(w):
-                                i_mod = (r + i) % rows
-                                j_mod = (c + j) % cols
-                                if kmap_2d[i_mod][j_mod] != target:
-                                    valid = False
-                                    break
-                                cells.add((i_mod, j_mod))
-                            if not valid:
-                                break
-                        if valid and cells and len(cells) == size:
-                            # Проверяем, что группа покрывает только минтермы
-                            if all(cell in minterms for cell in cells):
-                                # Вычисляем терм для группы
-                                term = []
-                                for var_idx, var in enumerate(variables):
-                                    values = set()
-                                    for gr, gc in cells:
-                                        if n_vars == 3:
-                                            bin_str = f"{gr}{gray_cols[gc]}"
-                                        else:
-                                            bin_str = f"{gray_rows[gr]}{gray_cols[gc]}"
-                                        values.add(int(bin_str[var_idx]))
-                                    if len(values) == 1:
-                                        val = values.pop()
-                                        term_val = 0 if is_sknf else 1
-                                        if (is_sknf and val == 1) or (not is_sknf and val == 0):
-                                            term_val = 1 - term_val
-                                        term.append((var, term_val))
-                                var_count = len(term)
-                                # Для СДНФ исключаем группы с var_count=1, если есть альтернативы
-                                if not is_sknf and var_count == 1 and any(len(g[3]) >= 2 for g in groups):
-                                    continue
-                                groups.append((cells, size, var_count, term))
+    def is_valid_rectangle(start_r, start_c, height, width):
+        """Проверяет, является ли прямоугольник valid."""
+        for dr in range(height):
+            for dc in range(width):
+                r = (start_r + dr) % rows
+                c = (start_c + dc) % cols
+                if kmap_2d[r][c] != target:
+                    return False
+        return True
     
-    essential_groups = []
-    covered_minterms = set()
+    def expand_rectangle(start_r, start_c):
+        """Расширяет прямоугольник максимально возможного размера."""
+        max_height, max_width = 1, 1
+        
+        # Расширяем по высоте
+        for height in range(1, rows + 1):
+            if not is_valid_rectangle(start_r, start_c, height, 1):
+                break
+            max_height = height
+        
+        # Расширяем по ширине для каждой возможной высоты
+        best_area = 0
+        best_rect = None
+        
+        for h in range(1, max_height + 1):
+            for w in range(1, cols + 1):
+                if is_valid_rectangle(start_r, start_c, h, w):
+                    area = h * w
+                    if area > best_area:
+                        best_area = area
+                        best_rect = (h, w)
+        
+        if best_rect:
+            h, w = best_rect
+            cells = set()
+            for dr in range(h):
+                for dc in range(w):
+                    r = (start_r + dr) % rows
+                    c = (start_c + dc) % cols
+                    cells.add((r, c))
+            return cells
+        return None
     
-    # Выбираем существенные импликанты
-    for mt in minterms:
-        covering_groups = [(g, s, v, t) for g, s, v, t in groups if mt in g]
-        if len(covering_groups) == 1:
-            group, size, var_count, term = covering_groups[0]
-            if group not in [g for g, _, _, _ in essential_groups]:
-                essential_groups.append((group, size, var_count, term))
-                covered_minterms.update(group)
+    # Ищем максимальные прямоугольники для каждой ячейки
+    for r in range(rows):
+        for c in range(cols):
+            if kmap_2d[r][c] == target and (r, c) not in visited:
+                rect = expand_rectangle(r, c)
+                if rect:
+                    # Проверяем, не является ли этот прямоугольник подмножеством уже найденного
+                    is_subset = False
+                    for existing in groups:
+                        if rect.issubset(existing):
+                            is_subset = True
+                            break
+                    
+                    if not is_subset:
+                        # Удаляем все подмножества нового прямоугольника
+                        groups = [g for g in groups if not g.issubset(rect)]
+                        groups.append(rect)
+                        visited.update(rect)
     
-    # Покрываем оставшиеся минтермы
-    while len(covered_minterms) < len(minterms):
+    return groups
+
+def find_essential_groups(kmap_2d: List[List[int]], target: int = 1) -> List[Set[Tuple[int, int]]]:
+    """Находит минимальное покрытие."""
+    rows, cols = len(kmap_2d), len(kmap_2d[0])
+    
+    # Находим все ячейки с target
+    target_cells = set()
+    for r in range(rows):
+        for c in range(cols):
+            if kmap_2d[r][c] == target:
+                target_cells.add((r, c))
+    
+    if not target_cells:
+        return []
+    
+    # Находим все максимальные группы
+    all_groups = find_maximal_rectangles(kmap_2d, target)
+    
+    # Жадный алгоритм покрытия
+    covered = set()
+    selected_groups = []
+    
+    while covered != target_cells:
         best_group = None
-        best_count = -1
-        best_covered = set()
-        best_var_count = float('inf')
-        for group, size, var_count, term in groups:
-            if group in [g for g, _, _, _ in essential_groups]:
+        best_coverage = 0
+        
+        for group in all_groups:
+            if group in selected_groups:
                 continue
-            new_covered = group - covered_minterms
-            count = len(new_covered)
-            # Предпочитаем группы с меньшим числом переменных, но для СДНФ var_count >= 2
-            if count > 0 and (var_count < best_var_count or (var_count == best_var_count and count > best_count)) and (is_sknf or var_count >= 2):
-                best_count = count
+            new_coverage = len(group - covered)
+            if new_coverage > best_coverage:
+                best_coverage = new_coverage
                 best_group = group
-                best_covered = new_covered
-                best_var_count = var_count
-                best_term = term
+        
         if best_group is None:
             break
-        essential_groups.append((best_group, size, best_var_count, best_term))
-        covered_minterms.update(best_covered)
+            
+        selected_groups.append(best_group)
+        covered |= best_group
     
-    result = [term for _, _, _, term in essential_groups if term]
+    return selected_groups
+
+def group_to_term(group: Set[Tuple[int, int]], row_vars: List[str], col_vars: List[str], 
+                 gray_rows: List[str], gray_cols: List[str], is_sknf: bool = False) -> List[Tuple[str, int]]:
+    """Преобразует группу ячеек в логический терм."""
+    if not group:
+        return []
     
-    return sorted(result, key=lambda x: term_to_string(x, is_sknf))
+    constant_vars = {}
+    
+    # Анализируем строки
+    if row_vars:
+        rows_covered = set(r for r, c in group)
+        for i, var in enumerate(row_vars):
+            values = set()
+            for row in rows_covered:
+                if row < len(gray_rows) and i < len(gray_rows[row]):
+                    values.add(int(gray_rows[row][i]))
+            
+            if len(values) == 1:
+                value = values.pop()
+                if is_sknf:
+                    constant_vars[var] = 0 if value == 0 else 1
+                else:
+                    constant_vars[var] = 1 if value == 1 else 0
+    
+    # Анализируем столбцы
+    if col_vars:
+        cols_covered = set(c for r, c in group)
+        for i, var in enumerate(col_vars):
+            values = set()
+            for col in cols_covered:
+                if col < len(gray_cols) and i < len(gray_cols[col]):
+                    values.add(int(gray_cols[col][i]))
+            
+            if len(values) == 1:
+                value = values.pop()
+                if is_sknf:
+                    constant_vars[var] = 0 if value == 0 else 1
+                else:
+                    constant_vars[var] = 1 if value == 1 else 0
+    
+    return [(var, val) for var, val in constant_vars.items()]
 
 def minimize_sknf_karnaugh(truth_table: List[Dict], variables: List[str]) -> str:
     """Минимизация СКНФ с помощью карты Карно."""
-    kmap_2d, kmap_flat, rows, cols, row_vars, col_vars, gray_rows, gray_cols = build_karnaugh_map(truth_table, variables, is_sknf=True)
-    if kmap_2d is None:
+    result = build_karnaugh_map(truth_table, variables, is_sknf=True)
+    if result[0] is None:
         return "1"
+    
+    kmap_2d, kmap_flat, rows, cols, row_vars, col_vars, gray_rows, gray_cols = result
     
     print("\nКарта Карно для СКНФ:")
     print_karnaugh_map(kmap_flat, row_vars + col_vars)
     
-    groups = find_groups(kmap_2d, len(variables), variables, rows, cols, gray_rows, gray_cols, is_sknf=True)
+    # Для СКНФ ищем группы НУЛЕЙ
+    groups = find_essential_groups(kmap_2d, target=0)
     
-    result = [term_to_string(group, is_sknf=True) for group in groups]
-    return " & ".join(f"({r})" for r in sorted(result)) if result else "1"
+    # Преобразуем группы в термы
+    terms = []
+    for group in groups:
+        term = group_to_term(group, row_vars, col_vars, gray_rows, gray_cols, is_sknf=True)
+        if term:
+            terms.append(term)
+    
+    result_terms = [term_to_string(term, is_sknf=True) for term in terms]
+    return " & ".join(f"({r})" for r in sorted(result_terms)) if result_terms else "1"
 
 def minimize_sdnf_karnaugh(truth_table: List[Dict], variables: List[str]) -> str:
     """Минимизация СДНФ с помощью карты Карно."""
-    kmap_2d, kmap_flat, rows, cols, row_vars, col_vars, gray_rows, gray_cols = build_karnaugh_map(truth_table, variables)
-    if kmap_2d is None:
+    result = build_karnaugh_map(truth_table, variables, is_sknf=False)
+    if result[0] is None:
         return "0"
+    
+    kmap_2d, kmap_flat, rows, cols, row_vars, col_vars, gray_rows, gray_cols = result
     
     print("\nКарта Карно для СДНФ:")
     print_karnaugh_map(kmap_flat, row_vars + col_vars)
     
-    groups = find_groups(kmap_2d, len(variables), variables, rows, cols, gray_rows, gray_cols)
+    # Для СДНФ ищем группы ЕДИНИЦ
+    groups = find_essential_groups(kmap_2d, target=1)
     
-    result = [term_to_string(group) for group in groups]
-    return " | ".join(f"({r})" for r in sorted(result)) if result else "0"
+    # Преобразуем группы в термы
+    terms = []
+    for group in groups:
+        term = group_to_term(group, row_vars, col_vars, gray_rows, gray_cols, is_sknf=False)
+        if term:
+            terms.append(term)
+    
+    result_terms = [term_to_string(term) for term in terms]
+    return " | ".join(f"({r})" for r in sorted(result_terms)) if result_terms else "0"

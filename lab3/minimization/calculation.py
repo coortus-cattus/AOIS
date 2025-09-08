@@ -1,4 +1,5 @@
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Set
+from itertools import product, combinations
 from utils.table_printer import print_implicant_stages
 from utils.common import term_to_string
 
@@ -32,144 +33,216 @@ def covers_minterm(implicant: List[Tuple[str, int]], minterm: List[Tuple[str, in
             return False
     return True
 
-def minimize_sknf_calculation(truth_table: List[Dict], variables: List[str]) -> str:
-    """Минимизация СКНФ расчётным методом."""
-    terms = []
-    for row in truth_table:
-        if not row['result']:
-            term = [(var, 1 if row[var] else 0) for var in variables]
-            terms.append(term)
-    
+def get_prime_implicants(terms: List[List[Tuple[str, int]]], variables: List[str], is_sknf: bool = False) -> List[List[Tuple[str, int]]]:
+    """Находит все простые импликанты используя метод Квайна-Мак-Класки."""
     if not terms:
-        return "1"
+        return []
     
-    print("\nСтадии склеивания СКНФ:")
+    # Преобразуем термы в бинарный формат
     bin_terms = [term_to_bin(term, variables) for term in terms]
-    stages_bin = [bin_terms]
-    all_implicants_bin = bin_terms.copy()
+    current_stage = bin_terms
+    prime_implicants_bin = set()
+    stages_bin = [current_stage]
     
-    while True:
-        new_terms = []
-        used_in_stage = set()
-        for i, term1 in enumerate(stages_bin[-1]):
-            for j, term2 in enumerate(stages_bin[-1][i+1:], i+1):
-                diff = 0
+    while current_stage:
+        used_indices = set()
+        next_stage = []
+        
+        # Пытаемся склеить все возможные пары термов
+        for i in range(len(current_stage)):
+            for j in range(i + 1, len(current_stage)):
+                term1 = current_stage[i]
+                term2 = current_stage[j]
+                
+                # Проверяем, можно ли склеить термы
+                diff_count = 0
                 diff_pos = -1
+                
                 for k in range(len(term1)):
-                    if term1[k] != term2[k] and term1[k] != '_' and term2[k] != '_':
-                        diff += 1
-                        diff_pos = k
-                if diff == 1:
-                    used_in_stage.add(i)
-                    used_in_stage.add(j)
+                    if term1[k] != term2[k]:
+                        if term1[k] != '_' and term2[k] != '_':
+                            diff_count += 1
+                            diff_pos = k
+                        else:
+                            # Если один из термов уже имеет '_' в этой позиции, а другой - нет
+                            diff_count = 2  # Нельзя склеить
+                            break
+                
+                if diff_count == 1:
+                    used_indices.add(i)
+                    used_indices.add(j)
                     new_term = list(term1)
                     new_term[diff_pos] = '_'
-                    new_terms.append(''.join(new_term))
+                    new_term_str = ''.join(new_term)
+                    if new_term_str not in next_stage:
+                        next_stage.append(new_term_str)
         
-        for i, term in enumerate(stages_bin[-1]):
-            if i not in used_in_stage:
-                new_terms.append(term)
+        # Добавляем неиспользованные термы в простые импликанты
+        for idx in range(len(current_stage)):
+            if idx not in used_indices:
+                prime_implicants_bin.add(current_stage[idx])
         
-        new_terms = sorted(list(set(new_terms)))
-        all_implicants_bin.extend(new_terms)
-        
-        if len(new_terms) == len(stages_bin[-1]) or not new_terms:
+        if not next_stage:
             break
+            
+        # Переходим к следующей стадии
+        current_stage = next_stage
+        stages_bin.append(current_stage)
+    
+    # Преобразуем обратно в термы
+    prime_implicants = [bin_to_term(bin_str, variables) for bin_str in prime_implicants_bin]
+    
+    # Выводим стадии склеивания для отладки
+    stages_terms = [[bin_to_term(b, variables) for b in stage] for stage in stages_bin]
+    if is_sknf:
+        print_implicant_stages(stages_terms, is_sknf=True)
+    else:
+        print_implicant_stages(stages_terms)
+    
+    return prime_implicants
+
+def find_minimal_cover(prime_implicants: List[List[Tuple[str, int]]], 
+                      minterms: List[List[Tuple[str, int]]]) -> List[List[Tuple[str, int]]]:
+    """Находит минимальное покрытие используя алгоритм Петрика."""
+    if not minterms:
+        return []
+    
+    # Строим таблицу покрытия
+    coverage_table = []
+    for imp in prime_implicants:
+        row = []
+        for minterm in minterms:
+            row.append(1 if covers_minterm(imp, minterm) else 0)
+        coverage_table.append(row)
+    
+    # Находим существенные импликанты
+    essential_implicants = []
+    covered_minterms = set()
+    
+    for j in range(len(minterms)):
+        covering_imps = []
+        for i in range(len(prime_implicants)):
+            if coverage_table[i][j] == 1:
+                covering_imps.append(i)
         
-        stages_bin.append(new_terms)
+        if len(covering_imps) == 1:
+            imp_idx = covering_imps[0]
+            if prime_implicants[imp_idx] not in essential_implicants:
+                essential_implicants.append(prime_implicants[imp_idx])
+                # Отмечаем покрытые минтермы
+                for k in range(len(minterms)):
+                    if coverage_table[imp_idx][k] == 1:
+                        covered_minterms.add(k)
     
-    stages = [[bin_to_term(b, variables) for b in stage] for stage in stages_bin]
-    print_implicant_stages(stages, is_sknf=True)
+    # Если все минтермы покрыты существенными импликантами
+    if len(covered_minterms) == len(minterms):
+        return essential_implicants
     
-    result = []
-    for term in stages[-1]:
-        result.append(term_to_string(term, is_sknf=True))
-    return " & ".join(f"({r})" for r in sorted(result)) if result else "1"
+    # Удаляем уже покрытые минтермы и существенные импликанты
+    remaining_minterms = [minterms[i] for i in range(len(minterms)) if i not in covered_minterms]
+    remaining_imps = []
+    remaining_coverage = []
+    
+    for i, imp in enumerate(prime_implicants):
+        if imp not in essential_implicants:
+            remaining_imps.append(imp)
+            row = []
+            for j in range(len(minterms)):
+                if j not in covered_minterms and coverage_table[i][j] == 1:
+                    row.append(1)
+                else:
+                    row.append(0)
+            remaining_coverage.append(row)
+    
+    if not remaining_minterms:
+        return essential_implicants
+    
+    # Используем алгоритм Петрика для оставшихся минтермов
+    # Формируем продукт сумм для алгоритма Петрика
+    petrick_products = []
+    for j in range(len(remaining_minterms)):
+        product_terms = []
+        for i in range(len(remaining_imps)):
+            if remaining_coverage[i][j] == 1:
+                product_terms.append({i})
+        petrick_products.append(product_terms)
+    
+    # Комбинируем продукты
+    if petrick_products:
+        result_products = petrick_products[0]
+        for i in range(1, len(petrick_products)):
+            new_products = []
+            for prod1 in result_products:
+                for prod2 in petrick_products[i]:
+                    new_products.append(prod1 | prod2)
+            # Удаляем дубликаты и доминируемые множества
+            result_products = []
+            for prod in new_products:
+                if prod not in result_products:
+                    # Проверяем, не доминируется ли это множество
+                    to_add = True
+                    for existing in result_products[:]:
+                        if existing.issubset(prod):
+                            result_products.remove(existing)
+                        elif prod.issubset(existing):
+                            to_add = False
+                            break
+                    if to_add:
+                        result_products.append(prod)
+    
+    # Выбираем множество с наименьшим количеством импликантов
+    if petrick_products and result_products:
+        best_set = min(result_products, key=len)
+        selected_remaining = [remaining_imps[i] for i in best_set]
+    else:
+        selected_remaining = []
+    
+    return essential_implicants + selected_remaining
 
 def minimize_sdnf_calculation(truth_table: List[Dict], variables: List[str]) -> str:
     """Минимизация СДНФ расчётным методом."""
-    terms = []
+    # Получаем минтермы из таблицы истинности
+    minterms = []
     for row in truth_table:
         if row['result']:
             term = [(var, 1 if row[var] else 0) for var in variables]
-            terms.append(term)
+            minterms.append(term)
     
-    if not terms:
+    if not minterms:
         return "0"
     
-    print("\nСтадии склеивания СДНФ:")
-    bin_terms = [term_to_bin(term, variables) for term in terms]
-    stages_bin = [bin_terms]
-    all_implicants_bin = bin_terms.copy()
+    print("\nПоиск простых импликантов для СДНФ:")
+    # Находим все простые импликанты
+    prime_implicants = get_prime_implicants(minterms, variables)
     
-    while True:
-        new_terms = []
-        used_in_stage = set()
-        for i, term1 in enumerate(stages_bin[-1]):
-            for j, term2 in enumerate(stages_bin[-1][i+1:], i+1):
-                diff = 0
-                diff_pos = -1
-                for k in range(len(term1)):
-                    if term1[k] != term2[k] and term1[k] != '_' and term2[k] != '_':
-                        diff += 1
-                        diff_pos = k
-                if diff == 1:
-                    used_in_stage.add(i)
-                    used_in_stage.add(j)
-                    new_term = list(term1)
-                    new_term[diff_pos] = '_'
-                    new_terms.append(''.join(new_term))
-        
-        for i, term in enumerate(stages_bin[-1]):
-            if i not in used_in_stage:
-                new_terms.append(term)
-        
-        new_terms = sorted(list(set(new_terms)))
-        all_implicants_bin.extend(new_terms)
-        
-        if len(new_terms) == len(stages_bin[-1]) or not new_terms:
-            break
-        
-        stages_bin.append(new_terms)
+    # Находим минимальное покрытие
+    minimal_cover = find_minimal_cover(prime_implicants, minterms)
     
-    stages = [[bin_to_term(b, variables) for b in stage] for stage in stages_bin]
-    print_implicant_stages(stages)
+    # Формируем результат
+    result_terms = [term_to_string(term) for term in minimal_cover]
+    return " | ".join(f"({r})" for r in sorted(result_terms)) if result_terms else "0"
+
+def minimize_sknf_calculation(truth_table: List[Dict], variables: List[str]) -> str:
+    """Минимизация СКНФ расчётным методом."""
+    # Получаем макстермы из таблицы истинности
+    maxterms = []
+    for row in truth_table:
+        if not row['result']:
+            term = [(var, 1 if row[var] else 0) for var in variables]
+            maxterms.append(term)
     
-    implicants = [bin_to_term(b, variables) for b in sorted(set(all_implicants_bin))]
-    minterms = terms
-    selected = []
-    covered = set()
+    if not maxterms:
+        return "1"
     
-    # Выбираем существенные импликанты
-    for j in range(len(minterms)):
-        covering_imps = [(i, imp) for i, imp in enumerate(implicants) if covers_minterm(imp, minterms[j])]
-        if len(covering_imps) == 1:
-            imp_idx, imp = covering_imps[0]
-            if imp not in selected:
-                selected.append(imp)
-                covered.update(j for j in range(len(minterms)) if covers_minterm(imp, minterms[j]))
+    print("\nПоиск простых импликантов для СКНФ:")
+    # Находим все простые импликанты (для СКНФ алгоритм аналогичен)
+    prime_implicants = get_prime_implicants(maxterms, variables, is_sknf=True)
     
-    # Покрываем оставшиеся минтермы, отдавая приоритет импликантам с меньшим числом переменных
-    while len(covered) < len(minterms):
-        best_imp = None
-        best_count = -1
-        best_covered = set()
-        best_var_count = float('inf')
-        for i, imp in enumerate(implicants):
-            if imp in selected:
-                continue
-            new_covered = set(j for j in range(len(minterms)) if covers_minterm(imp, minterms[j]) and j not in covered)
-            count = len(new_covered)
-            var_count = len([v for v, _ in imp])
-            if count > 0 and (count > best_count or (count == best_count and var_count < best_var_count)):
-                best_count = count
-                best_imp = imp
-                best_covered = new_covered
-                best_var_count = var_count
-        if best_imp is None:
-            break
-        selected.append(best_imp)
-        covered.update(best_covered)
+    # Находим минимальное покрытие
+    minimal_cover = find_minimal_cover(prime_implicants, maxterms)
     
-    result = [term_to_string(term) for term in selected]
-    return " | ".join(f"({r})" for r in sorted(result)) if result else "0"
+    # Формируем результат
+    result_terms = [term_to_string(term, is_sknf=True) for term in minimal_cover]
+    return " & ".join(f"({r})" for r in sorted(result_terms)) if result_terms else "1"
+
+
